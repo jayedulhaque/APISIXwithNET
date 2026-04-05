@@ -1,6 +1,6 @@
 # APISIXwithNET
 
-A .NET 8 Web API sample (tasks CRUD, Server-Sent Events, WebSocket echo) fronted by **Apache APISIX 3.x**, with **etcd 3.5** for configuration and the **APISIX Dashboard** for managing routes.
+A .NET 8 Web API sample (tasks CRUD, Server-Sent Events, WebSocket echo) fronted by **Apache APISIX 3.x**, with **etcd 3.5** for configuration, the **APISIX Dashboard** for managing routes, and optional **[Casdoor](https://casdoor.org/)** (OAuth/OIDC) behind the same gateway using **host-based** routing.
 
 ## Architecture
 
@@ -12,15 +12,17 @@ flowchart LR
   dash[apisix_dashboard_9000]
   app1[app1_8080]
   app2[app2_8080]
+  casdoor[casdoor_8000]
 
   clients -->|"HTTP"| apisix
   apisix -->|"round_robin"| app1
   apisix -->|"round_robin"| app2
+  apisix -->|"Host_casdoor.localhost"| casdoor
   apisix <-->|"config"| etcd
   dash -->|"manage_routes"| etcd
 ```
 
-- **Data plane**: Clients call `http://localhost:9080` (APISIX). APISIX load-balances to two identical **TaskApi** containers (`app1`, `app2`) on port **8080**.
+- **Data plane**: Clients call `http://localhost:9080` (APISIX). APISIX load-balances to two identical **TaskApi** containers (`app1`, `app2`) on port **8080**. **Casdoor** is reached on the same port **9080** using a different hostname (`casdoor.localhost`), not a path prefix.
 - **Control plane**: **APISIX** and **APISIX Dashboard** both use **etcd** as the configuration store (`/apisix` prefix).
 
 ## Prerequisites
@@ -44,13 +46,141 @@ docker compose up --build
 | APISIX Admin API | `http://localhost:9180` |
 | APISIX Dashboard | `http://localhost:9000` |
 | etcd (client API) | `localhost:2379` |
+| Casdoor (direct, optional) | `http://localhost:8000` |
+| Casdoor (via APISIX, after route) | `http://casdoor.localhost:9080` ([hosts file](#casdoor-and-apisix)) |
 
-The .NET apps (`app1`, `app2`) are **not** published on the host; they are reached only through Docker networking and APISIX.
+The .NET apps (`app1`, `app2`) are **not** published on the host; they are reached only through Docker networking and APISIX. Casdoor is also on the internal Docker network; **8000** is published for optional direct UI access during setup.
 
 ### Default credentials
 
 - **APISIX Dashboard** ([`dashboard_conf/conf.yaml`](dashboard_conf/conf.yaml)): username `admin`, password `admin` (and `user` / `user`).
 - **APISIX Admin API** ([`apisix_conf/config.yaml`](apisix_conf/config.yaml)): API key for the `admin` role is `edd1c9f034335f136f87ad84b625c8f1` (header `X-API-KEY`). Change these values before any real deployment.
+- **Casdoor** (first login; change immediately): user `built-in/admin`, password `123` ([Casdoor Docker docs](https://casdoor.org/docs/basic/try-with-docker/)).
+
+## Casdoor and APISIX
+
+Casdoor does **not** support serving under a path prefix like `http://localhost:9080/casdoor/` (see [upstream discussion](https://github.com/casdoor/casdoor/issues/2147)). This stack exposes Casdoor through APISIX using **host-based routing**: same gateway port **9080**, but the HTTP `Host` header is **`casdoor.localhost`**.
+
+### Configuration in this repo
+
+| Item | Purpose |
+|------|--------|
+| [`docker-compose.yml`](docker-compose.yml) | Service **`casdoor`**: image **`casbin/casdoor-all-in-one:2.388.1`**, volume **`casdoor_data`** for SQLite under `/data`, optional host port **8000** |
+| [`casdoor_conf/app.conf`](casdoor_conf/app.conf) | SQLite DB at **`file:/data/casdoor.db`**, **`origin`** / **`originFrontend`** = `http://casdoor.localhost:9080` so OAuth redirects match the public URL through APISIX |
+
+For production, replace all-in-one with **`casbin/casdoor`** plus your own database and hardened secrets.
+
+### Hosts file
+
+Map **`casdoor.localhost`** to your loopback address so browsers and `curl` resolve the hostname:
+
+| OS | Action |
+|----|--------|
+| Windows | Edit `C:\Windows\System32\drivers\etc\hosts` (as Administrator): add `127.0.0.1 casdoor.localhost` |
+| Linux / macOS | Add `127.0.0.1 casdoor.localhost` to `/etc/hosts` |
+
+### APISIX Dashboard: upstream and route
+
+APISIX still listens on **9080**; you add a **separate listener** only if you change [`apisix_conf/config.yaml`](apisix_conf/config.yaml). Here, Casdoor is distinguished by **route `hosts`**, not by a new port on the gateway.
+
+1. **Upstream** → **Create**
+   - **Name:** e.g. `casdoor-upstream`
+   - **Nodes:** Host `casdoor`, Port `8000`, Weight `1`
+   - **Load balancing:** round robin (default)
+   - **Scheme:** `http`
+2. **Route** → **Create**
+   - **Name / Description:** e.g. `casdoor`, `OAuth UI and APIs behind APISIX`
+   - **Request Basic Define**
+     - **Hosts** (or **Host**): `casdoor.localhost` (must match [`casdoor_conf/app.conf`](casdoor_conf/app.conf) `origin` hostname)
+     - **URI:** `/*`
+     - **Methods:** `GET`, `POST`, `PUT`, `DELETE`, `PATCH`, `OPTIONS`
+   - **Upstream:** select `casdoor-upstream`
+   - Save
+
+**Optional — Raw Editor / Admin API:** see [`apisix_conf/route-casdoor-example.json`](apisix_conf/route-casdoor-example.json). Example PUT:
+
+```bash
+curl -s -X PUT "http://127.0.0.1:9180/apisix/admin/routes/casdoor" \
+  -H "X-API-KEY: edd1c9f034335f136f87ad84b625c8f1" \
+  -H "Content-Type: application/json" \
+  -d @apisix_conf/route-casdoor-example.json
+```
+
+If OAuth redirects or cookies misbehave, add headers such as `X-Forwarded-Proto` / `X-Forwarded-Host` using APISIX plugins (see [Casdoor behind Nginx](https://casdoor.org/docs/deployment/nginx/) for the intended headers).
+
+### Casdoor UI and OAuth application
+
+1. Open **`http://casdoor.localhost:9080`** (through APISIX) or **`http://localhost:8000`** (direct to the container). Prefer the gateway URL so **`origin`** matches day-to-day use.
+2. Sign in as **`built-in/admin`** / **`123`** and change the password.
+3. Under **Applications**, open or create an application. Note **Client ID** and **Client Secret**. Enable **Authorization Code** and, if you need refresh tokens, set **Refresh token expiration** (and enable the refresh grant as required by your Casdoor version).
+4. Add a **Redirect URI** that matches your client (for example `http://localhost:8080/callback` or a tool such as [OAuth 2.0 Debugger](https://oauthdebugger.com/) — it must match exactly what you pass as `redirect_uri`).
+
+### Get `access_token` and `refresh_token` (authorization code flow)
+
+Public base URL (through APISIX):
+
+`CASDOOR_PUBLIC=http://casdoor.localhost:9080`
+
+**1. Authorize (browser)** — open (replace placeholders):
+
+`http://casdoor.localhost:9080/login/oauth/authorize?client_id=YOUR_CLIENT_ID&redirect_uri=YOUR_REDIRECT_URI_ENCODED&response_type=code&scope=openid&state=random`
+
+After login, the browser is redirected to `redirect_uri?code=...&state=...`. Copy **`code`**.
+
+**2. Exchange code for tokens** — `POST` JSON to the token endpoint ([Casdoor OAuth docs](https://casdoor.org/docs/how-to-connect/oauth/)):
+
+```bash
+curl -s -X POST "http://casdoor.localhost:9080/api/login/oauth/access_token" \
+  -H "Content-Type: application/json" \
+  -d "{\"grant_type\":\"authorization_code\",\"client_id\":\"YOUR_CLIENT_ID\",\"client_secret\":\"YOUR_CLIENT_SECRET\",\"code\":\"CODE_FROM_REDIRECT\"}"
+```
+
+**PowerShell**
+
+```powershell
+$body = @{
+  grant_type    = "authorization_code"
+  client_id     = "YOUR_CLIENT_ID"
+  client_secret = "YOUR_CLIENT_SECRET"
+  code          = "CODE_FROM_REDIRECT"
+} | ConvertTo-Json
+
+Invoke-RestMethod -Uri "http://casdoor.localhost:9080/api/login/oauth/access_token" `
+  -Method Post -Body $body -ContentType "application/json; charset=utf-8"
+```
+
+A successful response includes **`access_token`**, **`refresh_token`** (when enabled), **`id_token`**, **`expires_in`**, etc.
+
+**3. Refresh tokens** — `POST` JSON (adjust path if your Casdoor build uses only the unified token endpoint; see [Refresh Token](https://casdoor.org/docs/how-to-connect/oauth/)):
+
+```bash
+curl -s -X POST "http://casdoor.localhost:9080/api/login/oauth/refresh_token" \
+  -H "Content-Type: application/json" \
+  -d "{\"grant_type\":\"refresh_token\",\"refresh_token\":\"YOUR_REFRESH_TOKEN\",\"client_id\":\"YOUR_CLIENT_ID\",\"client_secret\":\"YOUR_CLIENT_SECRET\",\"scope\":\"openid\"}"
+```
+
+If your server returns **404** on `refresh_token`, try the same JSON body against **`/api/login/oauth/access_token`** (some versions use one token endpoint for all grants).
+
+### Quick API-only test (password grant)
+
+If you enable **Resource Owner Password** on the application, you can obtain tokens without a browser redirect ([docs](https://casdoor.org/docs/how-to-connect/oauth/)):
+
+```bash
+curl -s -X POST "http://casdoor.localhost:9080/api/login/oauth/access_token" \
+  -H "Content-Type: application/json" \
+  -d "{\"grant_type\":\"password\",\"client_id\":\"YOUR_CLIENT_ID\",\"client_secret\":\"YOUR_CLIENT_SECRET\",\"username\":\"built-in/admin\",\"password\":\"YOUR_PASSWORD\"}"
+```
+
+Do **not** use password grant in untrusted clients in production.
+
+### Casdoor troubleshooting
+
+| Symptom | What to check |
+|--------|----------------|
+| Redirect URI mismatch | Redirect URI in Casdoor application **exactly** matches the client; `origin` in [`casdoor_conf/app.conf`](casdoor_conf/app.conf) matches **`http://casdoor.localhost:9080`** |
+| Blank page or wrong assets via APISIX | Route **`hosts`** includes **`casdoor.localhost`**, **`uri`** is `/*`, upstream points to **`casdoor:8000`** |
+| Works on `localhost:8000` but not via **9080** | **Hosts** file entry for **`casdoor.localhost`**; use **http** not https unless TLS is configured |
+| Tokens missing `refresh_token` | Enable refresh token / expiration on the **Application** in Casdoor |
 
 ## .NET API surface (direct to TaskApi)
 
@@ -370,9 +500,11 @@ Then call `http://localhost:5280/api/tasks`, `http://localhost:5280/sse`, or `ws
 
 - [`TaskApi/`](TaskApi/) — ASP.NET Core 8 Web API
 - [`Dockerfile`](Dockerfile) — multi-stage image (SDK build, ASP.NET runtime, listens on **8080**)
-- [`docker-compose.yml`](docker-compose.yml) — etcd, APISIX, Dashboard, `app1`, `app2`
+- [`docker-compose.yml`](docker-compose.yml) — etcd, APISIX, Dashboard, `app1`, `app2`, **Casdoor**
 - [`apisix_conf/config.yaml`](apisix_conf/config.yaml) — APISIX main config (etcd endpoints, Admin API keys)
+- [`apisix_conf/route-casdoor-example.json`](apisix_conf/route-casdoor-example.json) — example **route** for Casdoor (`hosts: casdoor.localhost`)
 - [`dashboard_conf/conf.yaml`](dashboard_conf/conf.yaml) — Dashboard listen address and etcd endpoints
+- [`casdoor_conf/app.conf`](casdoor_conf/app.conf) — Casdoor server config (SQLite, origin for public URL)
 
 ## License
 

@@ -60,9 +60,21 @@ services:
     networks:
       - apisix
 
+  casdoor:
+    image: casbin/casdoor-all-in-one:2.388.1
+    restart: always
+    volumes:
+      - casdoor_data:/data
+      - ./casdoor_conf/app.conf:/conf/app.conf:ro
+    ports:
+      - "8000:8000"
+    networks:
+      - apisix
+
 networks:
   apisix:
     driver: bridge
 
 volumes:
   etcd_data:
+  casdoor_data:
