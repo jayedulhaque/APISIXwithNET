@@ -43,6 +43,7 @@ services:
       - apisix
 
   app1:
+    platform: linux/amd64
     build:
       context: .
       dockerfile: Dockerfile
@@ -52,6 +53,7 @@ services:
       - apisix
 
   app2:
+    platform: linux/amd64
     build:
       context: .
       dockerfile: Dockerfile

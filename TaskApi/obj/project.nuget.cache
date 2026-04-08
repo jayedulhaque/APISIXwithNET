@@ -1,8 +1,12 @@
 {
   "version": 2,
-  "dgSpecHash": "e9agIx9OOYg=",
+  "dgSpecHash": "ycOZ2UqN9hY=",
   "success": true,
-  "projectFilePath": "C:\\Users\\user\\source\\repos\\APISIXwithNET\\TaskApi\\TaskApi.csproj",
-  "expectedPackageFiles": [],
+  "projectFilePath": "/src/TaskApi.csproj",
+  "expectedPackageFiles": [
+    "/root/.nuget/packages/microsoft.netcore.app.ref/8.0.25/microsoft.netcore.app.ref.8.0.25.nupkg.sha512",
+    "/root/.nuget/packages/microsoft.aspnetcore.app.ref/8.0.25/microsoft.aspnetcore.app.ref.8.0.25.nupkg.sha512",
+    "/root/.nuget/packages/microsoft.netcore.app.host.linux-x64/8.0.25/microsoft.netcore.app.host.linux-x64.8.0.25.nupkg.sha512"
+  ],
   "logs": []
 }

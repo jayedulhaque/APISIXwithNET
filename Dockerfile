@@ -1,5 +1,6 @@
 # syntax=docker/dockerfile:1
-FROM mcr.microsoft.com/dotnet/sdk:8.0 AS build
+# SDK and runtime use 9.x: the .NET 8 images hit SIGBUS (exit 135) on some Docker Desktop/WSL2 hosts.
+FROM mcr.microsoft.com/dotnet/sdk:9.0 AS build
 WORKDIR /src
 
 COPY TaskApi/TaskApi.csproj TaskApi/
@@ -9,7 +10,7 @@ COPY TaskApi/ TaskApi/
 WORKDIR /src/TaskApi
 RUN dotnet publish -c Release -o /app/publish --no-restore
 
-FROM mcr.microsoft.com/dotnet/aspnet:8.0
+FROM mcr.microsoft.com/dotnet/aspnet:9.0
 WORKDIR /app
 COPY --from=build /app/publish .
 
