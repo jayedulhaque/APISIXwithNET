@@ -12,11 +12,15 @@ flowchart LR
   dash[apisix_dashboard_9000]
   app1[app1_8080]
   app2[app2_8080]
+  tenant[tenantmanagement_8080]
+  postgres[postgres_5432]
   casdoor[casdoor_8000]
 
   clients -->|"HTTP"| apisix
   apisix -->|"round_robin"| app1
   apisix -->|"round_robin"| app2
+  apisix -->|"path_/tenant/*"| tenant
+  tenant -->|"EF_Core"| postgres
   apisix -->|"Host_casdoor.localhost"| casdoor
   apisix <-->|"config"| etcd
   dash -->|"manage_routes"| etcd
@@ -48,6 +52,7 @@ docker compose up --build
 | etcd (client API) | `localhost:2379` |
 | Casdoor (direct, optional) | `http://localhost:8000` |
 | Casdoor (via APISIX, after route) | `http://casdoor.localhost:9080` ([hosts file](#casdoor-and-apisix)) |
+| TenantManagement (direct, optional) | `http://localhost:5290` |
 
 The .NET apps (`app1`, `app2`) are **not** published on the host; they are reached only through Docker networking and APISIX. Casdoor is also on the internal Docker network; **8000** is published for optional direct UI access during setup.
 
@@ -487,6 +492,57 @@ Then run the [Tasks API](#1-tasks-api-http) checks against `http://localhost:908
 6. **Update** (PUT) and **delete** (DELETE); expect **200** / **204** when the request hits the instance that owns that task.
 7. Add routes for **`/sse`** and **`/ws`** if you need them; then run [SSE](#2-server-sent-events-get-sse) and [WebSocket](#3-websocket-ws) tests.
 
+## TenantManagement (Phase 1) behind APISIX
+
+`TenantManagement` is a separate .NET service for tenant onboarding. It is proxied by APISIX at `/tenant/*` and rewritten to the service root (`/`), so gateway calls use:
+
+- `GET http://localhost:9080/tenant/api/me`
+- `POST http://localhost:9080/tenant/api/tenants`
+
+### Create APISIX route for TenantManagement
+
+Use [`apisix_conf/route-tenantmanagement-example.json`](apisix_conf/route-tenantmanagement-example.json):
+
+```bash
+curl -s -X PUT "http://127.0.0.1:9180/apisix/admin/routes/tenant-management" \
+  -H "X-API-KEY: edd1c9f034335f136f87ad84b625c8f1" \
+  -H "Content-Type: application/json" \
+  -d @apisix_conf/route-tenantmanagement-example.json
+```
+
+### Testing: Casdoor application creation flow and onboarding checks
+
+1. Open `http://casdoor.localhost:9080` and sign in as an administrator.
+2. Go to **Applications** and create/update an app for TenantManagement.
+3. Validate these application settings:
+   - **Client ID / Client Secret** are available.
+   - **Redirect URI** is configured exactly as your OAuth client callback.
+   - **Grant type** includes **Authorization Code**.
+   - **Scope** includes at least `openid` and `email`.
+4. Obtain an access token via authorization code flow (see [Casdoor UI and OAuth application](#casdoor-ui-and-oauth-application) and [Get `access_token` and `refresh_token` (authorization code flow)](#get-access_token-and-refresh_token-authorization-code-flow)).
+5. Call `GET /tenant/api/me` with bearer token before onboarding:
+   - Expected: `200` with `onboarded=false`.
+6. Call `POST /tenant/api/tenants` with bearer token:
+
+```bash
+curl -s -X POST "http://localhost:9080/tenant/api/tenants" \
+  -H "Authorization: Bearer YOUR_ACCESS_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d "{\"name\":\"Acme Corp\",\"domain\":\"acme.local\"}"
+```
+
+7. Re-call `GET /tenant/api/me`:
+   - Expected: `200` with `onboarded=true` and `tenant_id`.
+
+### TenantManagement troubleshooting
+
+| Symptom | What to check |
+|--------|----------------|
+| `401 Unauthorized` | Token issuer (`Casdoor__Authority`) and audience (`Casdoor__Audience`) match the Casdoor application |
+| `401` with missing claims message | Access token includes `sub` and `email` claims |
+| `409` on tenant creation | Current user already has a member record or requested domain already exists |
+| DB startup failures | `postgres` container is healthy and `ConnectionStrings__TenantManagementDb` is reachable |
+
 ## Local development (without APISIX)
 
 ```bash
@@ -503,8 +559,10 @@ Then call `http://localhost:5280/api/tasks`, `http://localhost:5280/sse`, or `ws
 - [`docker-compose.yml`](docker-compose.yml) — etcd, APISIX, Dashboard, `app1`, `app2`, **Casdoor**
 - [`apisix_conf/config.yaml`](apisix_conf/config.yaml) — APISIX main config (etcd endpoints, Admin API keys)
 - [`apisix_conf/route-casdoor-example.json`](apisix_conf/route-casdoor-example.json) — example **route** for Casdoor (`hosts: casdoor.localhost`)
+- [`apisix_conf/route-tenantmanagement-example.json`](apisix_conf/route-tenantmanagement-example.json) — example **route** for TenantManagement (`/tenant/*` with rewrite)
 - [`dashboard_conf/conf.yaml`](dashboard_conf/conf.yaml) — Dashboard listen address and etcd endpoints
 - [`casdoor_conf/app.conf`](casdoor_conf/app.conf) — Casdoor server config (SQLite, origin for public URL)
+- [`TenantManagement/`](TenantManagement/) — .NET 9 Tenant onboarding API with Casdoor JWT auth and Postgres EF Core schema
 
 ## License
 
