@@ -31,10 +31,29 @@ builder.Services.AddAuthorization();
 
 var app = builder.Build();
 
-using (var scope = app.Services.CreateScope())
+const int maxMigrationAttempts = 10;
+var migrationDelay = TimeSpan.FromSeconds(2);
+
+for (var attempt = 1; attempt <= maxMigrationAttempts; attempt++)
 {
-    var dbContext = scope.ServiceProvider.GetRequiredService<TenantManagementDbContext>();
-    dbContext.Database.Migrate();
+    try
+    {
+        using var scope = app.Services.CreateScope();
+        var dbContext = scope.ServiceProvider.GetRequiredService<TenantManagementDbContext>();
+        dbContext.Database.Migrate();
+        break;
+    }
+    catch (Exception ex) when (attempt < maxMigrationAttempts)
+    {
+        app.Logger.LogWarning(
+            ex,
+            "Database migration attempt {Attempt}/{MaxAttempts} failed. Retrying in {DelaySeconds}s.",
+            attempt,
+            maxMigrationAttempts,
+            migrationDelay.TotalSeconds);
+
+        Thread.Sleep(migrationDelay);
+    }
 }
 
 app.UseAuthentication();

@@ -84,6 +84,12 @@ services:
       - postgres_data:/var/lib/postgresql/data
     ports:
       - "5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d tenant_management"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+      start_period: 10s
     networks:
       - apisix
 
@@ -97,8 +103,10 @@ services:
       Casdoor__Authority: http://casdoor.localhost:9080
       Casdoor__Audience: tenant-management
       Casdoor__RequireHttpsMetadata: "false"
+    restart: on-failure
     depends_on:
-      - postgres
+      postgres:
+        condition: service_healthy
     networks:
       - apisix
 
