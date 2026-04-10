@@ -1,10 +1,20 @@
 using Microsoft.EntityFrameworkCore;
 using TenantManagement.Models;
+using TenantManagement.Services;
 
 namespace TenantManagement.Data;
 
-public sealed class TenantManagementDbContext(DbContextOptions<TenantManagementDbContext> options) : DbContext(options)
+public sealed class TenantManagementDbContext : DbContext
 {
+    private readonly TenantContext _tenantContext;
+
+    public TenantManagementDbContext(
+        DbContextOptions<TenantManagementDbContext> options,
+        TenantContext tenantContext) : base(options)
+    {
+        _tenantContext = tenantContext;
+    }
+
     public DbSet<Tenant> Tenants => Set<Tenant>();
     public DbSet<Member> Members => Set<Member>();
     public DbSet<OrgUnit> OrgUnits => Set<OrgUnit>();
@@ -38,6 +48,8 @@ public sealed class TenantManagementDbContext(DbContextOptions<TenantManagementD
             entity.HasOne(x => x.Tenant).WithMany(x => x.Members).HasForeignKey(x => x.TenantId).OnDelete(DeleteBehavior.Cascade);
             entity.HasIndex(x => x.CasdoorUid).IsUnique();
             entity.HasIndex(x => x.TenantId);
+            entity.HasQueryFilter(m =>
+                _tenantContext.TenantId != null && m.TenantId == _tenantContext.TenantId.Value);
         });
 
         modelBuilder.Entity<OrgUnit>(entity =>
@@ -53,6 +65,8 @@ public sealed class TenantManagementDbContext(DbContextOptions<TenantManagementD
             entity.HasOne(x => x.Parent).WithMany(x => x.Children).HasForeignKey(x => x.ParentId).OnDelete(DeleteBehavior.Restrict);
             entity.HasIndex(x => x.TenantId);
             entity.HasIndex(x => x.ParentId);
+            entity.HasQueryFilter(o =>
+                _tenantContext.TenantId != null && o.TenantId == _tenantContext.TenantId.Value);
         });
 
         modelBuilder.Entity<MemberAssignment>(entity =>
@@ -93,6 +107,8 @@ public sealed class TenantManagementDbContext(DbContextOptions<TenantManagementD
             entity.HasOne(x => x.Parent).WithMany(x => x.Children).HasForeignKey(x => x.ParentId).OnDelete(DeleteBehavior.Restrict);
             entity.HasIndex(x => x.TenantId);
             entity.HasIndex(x => x.ParentId);
+            entity.HasQueryFilter(s =>
+                _tenantContext.TenantId != null && s.TenantId == _tenantContext.TenantId.Value);
         });
 
         modelBuilder.Entity<ServiceConfig>(entity =>

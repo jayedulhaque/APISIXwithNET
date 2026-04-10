@@ -2,6 +2,7 @@ using System.Security.Claims;
 using Microsoft.AspNetCore.Authentication.JwtBearer;
 using Microsoft.EntityFrameworkCore;
 using TenantManagement.Data;
+using TenantManagement.Middleware;
 using TenantManagement.Services;
 
 var builder = WebApplication.CreateBuilder(args);
@@ -12,6 +13,7 @@ builder.Services.AddHttpContextAccessor();
 
 builder.Services.AddScoped<UserContext>();
 builder.Services.AddScoped<IUserContextAccessor, UserContextAccessor>();
+builder.Services.AddScoped<TenantContext>();
 
 builder.Services.AddDbContext<TenantManagementDbContext>(options =>
     options.UseNpgsql(builder.Configuration.GetConnectionString("TenantManagementDb")));
@@ -57,6 +59,7 @@ for (var attempt = 1; attempt <= maxMigrationAttempts; attempt++)
 }
 
 app.UseAuthentication();
+app.UseMiddleware<TenantResolutionMiddleware>();
 app.UseAuthorization();
 
 app.MapControllers();

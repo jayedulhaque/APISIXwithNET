@@ -510,29 +510,116 @@ curl -s -X PUT "http://127.0.0.1:9180/apisix/admin/routes/tenant-management" \
   -d @apisix_conf/route-tenantmanagement-example.json
 ```
 
-### Testing: Casdoor application creation flow and onboarding checks
+### Beginner test flow: Casdoor -> APISIX -> TenantManagement
 
-1. Open `http://casdoor.localhost:9080` and sign in as an administrator.
-2. Go to **Applications** and create/update an app for TenantManagement.
-3. Validate these application settings:
-   - **Client ID / Client Secret** are available.
-   - **Redirect URI** is configured exactly as your OAuth client callback.
-   - **Grant type** includes **Authorization Code**.
-   - **Scope** includes at least `openid` and `email`.
-4. Obtain an access token via authorization code flow (see [Casdoor UI and OAuth application](#casdoor-ui-and-oauth-application) and [Get `access_token` and `refresh_token` (authorization code flow)](#get-access_token-and-refresh_token-authorization-code-flow)).
-5. Call `GET /tenant/api/me` with bearer token before onboarding:
-   - Expected: `200` with `onboarded=false`.
-6. Call `POST /tenant/api/tenants` with bearer token:
+Use this section as a copy-paste checklist. It shows each action in order and what response to expect.
+
+#### 0) Start all services
 
 ```bash
-curl -s -X POST "http://localhost:9080/tenant/api/tenants" \
-  -H "Authorization: Bearer YOUR_ACCESS_TOKEN" \
+docker compose up -d --build
+docker compose ps
+```
+
+You should see `apisix`, `casdoor`, `postgres`, and `tenantmanagement` in **Up** state.
+
+#### 1) Configure TenantManagement route in APISIX
+
+```bash
+curl -s -X PUT "http://127.0.0.1:9180/apisix/admin/routes/tenant-management" \
+  -H "X-API-KEY: edd1c9f034335f136f87ad84b625c8f1" \
+  -H "Content-Type: application/json" \
+  -d @apisix_conf/route-tenantmanagement-example.json
+```
+
+Quick check (should show route id and `/tenant/*` uri):
+
+```bash
+curl -s "http://127.0.0.1:9180/apisix/admin/routes/tenant-management" \
+  -H "X-API-KEY: edd1c9f034335f136f87ad84b625c8f1"
+```
+
+#### 2) Create or confirm Casdoor application
+
+1. Open `http://casdoor.localhost:9080` and sign in as admin.
+2. Go to **Applications** and create/update an app for TenantManagement client testing.
+3. Confirm:
+   - **Client ID** and **Client Secret** are available.
+   - **Redirect URI** exactly matches your callback URL.
+   - **Grant type** includes **Authorization Code**.
+   - **Scope** includes at least `openid` and `email`.
+4. Create or pick a normal test user (not admin) and make sure the user can sign in.
+
+#### 3) Get an access token from Casdoor
+
+Use the authorization code flow from [Get `access_token` and `refresh_token` (authorization code flow)](#get-access_token-and-refresh_token-authorization-code-flow), then keep the token in a shell variable:
+
+```bash
+TOKEN="YOUR_ACCESS_TOKEN"
+```
+
+#### 4) Call `GET /tenant/api/me` before onboarding
+
+```bash
+curl -i -s "http://localhost:9080/tenant/api/me" \
+  -H "Authorization: Bearer $TOKEN"
+```
+
+Expected:
+- HTTP `200`
+- JSON shows `onboarded: false`
+- user identity info from JWT (for example `sub`, `email`)
+
+#### 5) Onboard tenant with `POST /tenant/api/tenants`
+
+```bash
+curl -i -s -X POST "http://localhost:9080/tenant/api/tenants" \
+  -H "Authorization: Bearer $TOKEN" \
   -H "Content-Type: application/json" \
   -d "{\"name\":\"Acme Corp\",\"domain\":\"acme.local\"}"
 ```
 
-7. Re-call `GET /tenant/api/me`:
-   - Expected: `200` with `onboarded=true` and `tenant_id`.
+Expected:
+- HTTP `201` or `200` (depending on controller response shape)
+- response contains tenant details (name/domain and id fields)
+
+#### 6) Call `GET /tenant/api/me` again after onboarding
+
+```bash
+curl -i -s "http://localhost:9080/tenant/api/me" \
+  -H "Authorization: Bearer $TOKEN"
+```
+
+Expected:
+- HTTP `200`
+- `onboarded: true`
+- includes tenant linkage (`tenant_id` or equivalent field)
+
+#### 7) Negative checks (very important)
+
+1. **No token**
+   ```bash
+   curl -i -s "http://localhost:9080/tenant/api/me"
+   ```
+   Expected: `401 Unauthorized`
+
+2. **Second onboarding attempt with same user/domain**
+   ```bash
+   curl -i -s -X POST "http://localhost:9080/tenant/api/tenants" \
+     -H "Authorization: Bearer $TOKEN" \
+     -H "Content-Type: application/json" \
+     -d "{\"name\":\"Acme Corp\",\"domain\":\"acme.local\"}"
+   ```
+   Expected: `409 Conflict` (already onboarded or duplicate domain)
+
+#### 8) What this proves (end-to-end)
+
+This verifies the full chain:
+1. Casdoor authenticates the user and issues JWT.
+2. Client sends JWT to APISIX (`localhost:9080`).
+3. APISIX route `/tenant/*` forwards request to TenantManagement.
+4. TenantManagement validates JWT, resolves user identity, and reads/writes onboarding data in Postgres.
+5. `GET /api/me` behavior changes from `onboarded=false` to `onboarded=true` after `POST /api/tenants`.
 
 ### TenantManagement troubleshooting
 
@@ -542,6 +629,42 @@ curl -s -X POST "http://localhost:9080/tenant/api/tenants" \
 | `401` with missing claims message | Access token includes `sub` and `email` claims |
 | `409` on tenant creation | Current user already has a member record or requested domain already exists |
 | DB startup failures | `postgres` container is healthy and `ConnectionStrings__TenantManagementDb` is reachable |
+
+### Phase 2: Tenant isolation and org units (through APISIX)
+
+After onboarding, the API resolves your `tenant_id` from `members` (JWT `sub` → `casdoor_uid`) and applies EF Core **global query filters** on `org_units`, `members`, and `service_nodes` for that tenant. Org-unit APIs require an onboarded user; otherwise you get **`403`** with `code: tenant_required`.
+
+**Gateway base path (with [`route-tenantmanagement-example`](apisix_conf/route-tenantmanagement-example.json)):**
+
+| Action | Method and path |
+|--------|-----------------|
+| Nested organogram (recursive CTE → nested JSON) | `GET http://localhost:9080/tenant/api/org-units/tree` |
+| Create unit (optional `parentId`) | `POST http://localhost:9080/tenant/api/org-units` |
+| Update name / `unitType` | `PUT http://localhost:9080/tenant/api/org-units/{id}` |
+| Delete (blocked if children or service config references) | `DELETE http://localhost:9080/tenant/api/org-units/{id}` |
+
+**Manual verification**
+
+1. Complete [Phase 1 onboarding](#tenantmanagement-phase-1-behind-apisix) (Casdoor app + `POST /tenant/api/tenants`) so `GET /tenant/api/me` returns `onboarded=true`.
+2. Create a root department:
+
+```bash
+curl -s -X POST "http://localhost:9080/tenant/api/org-units" \
+  -H "Authorization: Bearer YOUR_ACCESS_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d "{\"name\":\"Engineering\",\"unitType\":\"Department\",\"parentId\":null}"
+```
+
+3. Fetch the tree (nested `nodes` for React):
+
+```bash
+curl -s "http://localhost:9080/tenant/api/org-units/tree" \
+  -H "Authorization: Bearer YOUR_ACCESS_TOKEN"
+```
+
+4. Call the same endpoints **without** onboarding (token for a user who never called `POST /tenant/api/tenants`): expect **`403`** on org-unit routes.
+
+**Note:** `GET /tenant/api/me` does not require a resolved tenant; org-unit routes do. The membership lookup in middleware uses `IgnoreQueryFilters()` on `members` so `tenant_id` can be resolved before filters apply.
 
 ## Local development (without APISIX)
 
@@ -554,7 +677,7 @@ Then call `http://localhost:5280/api/tasks`, `http://localhost:5280/sse`, or `ws
 
 ## Project layout
 
-- [`TaskApi/`](TaskApi/) — ASP.NET Core 8 Web API
+- [`TaskApi/`](TaskApi/) — ASP.NET Core 9 Web API
 - [`Dockerfile`](Dockerfile) — multi-stage image (SDK build, ASP.NET runtime, listens on **8080**)
 - [`docker-compose.yml`](docker-compose.yml) — etcd, APISIX, Dashboard, `app1`, `app2`, **Casdoor**
 - [`apisix_conf/config.yaml`](apisix_conf/config.yaml) — APISIX main config (etcd endpoints, Admin API keys)
@@ -562,7 +685,7 @@ Then call `http://localhost:5280/api/tasks`, `http://localhost:5280/sse`, or `ws
 - [`apisix_conf/route-tenantmanagement-example.json`](apisix_conf/route-tenantmanagement-example.json) — example **route** for TenantManagement (`/tenant/*` with rewrite)
 - [`dashboard_conf/conf.yaml`](dashboard_conf/conf.yaml) — Dashboard listen address and etcd endpoints
 - [`casdoor_conf/app.conf`](casdoor_conf/app.conf) — Casdoor server config (SQLite, origin for public URL)
-- [`TenantManagement/`](TenantManagement/) — .NET 9 Tenant onboarding API with Casdoor JWT auth and Postgres EF Core schema
+- [`TenantManagement/`](TenantManagement/) — .NET 9 Tenant onboarding API with Casdoor JWT auth, Postgres EF Core schema, tenant-scoped query filters, and org-unit tree API (recursive CTE)
 
 ## License
 
