@@ -1,6 +1,7 @@
 using System.Security.Claims;
 using Microsoft.AspNetCore.Authentication.JwtBearer;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.EntityFrameworkCore.Diagnostics;
 using TenantManagement.Data;
 using TenantManagement.Middleware;
 using TenantManagement.Services;
@@ -16,20 +17,40 @@ builder.Services.AddScoped<IUserContextAccessor, UserContextAccessor>();
 builder.Services.AddScoped<TenantContext>();
 
 builder.Services.AddDbContext<TenantManagementDbContext>(options =>
-    options.UseNpgsql(builder.Configuration.GetConnectionString("TenantManagementDb")));
+    options
+        .UseNpgsql(builder.Configuration.GetConnectionString("TenantManagementDb"))
+        .ConfigureWarnings(w =>
+            w.Ignore(RelationalEventId.PendingModelChangesWarning)));
 
 builder.Services
     .AddAuthentication(JwtBearerDefaults.AuthenticationScheme)
     .AddJwtBearer(options =>
     {
         var casdoor = builder.Configuration.GetSection("Casdoor");
-        options.Authority = casdoor["Authority"];
+        var authority = casdoor["Authority"]?.TrimEnd('/');
+        options.Authority = authority;
+        options.MetadataAddress = casdoor["MetadataAddress"];
         options.Audience = casdoor["Audience"];
         options.RequireHttpsMetadata = bool.TryParse(casdoor["RequireHttpsMetadata"], out var requireHttps) && requireHttps;
+        options.TokenValidationParameters.ValidIssuer = authority;
         options.TokenValidationParameters.NameClaimType = ClaimTypes.NameIdentifier;
     });
 
 builder.Services.AddAuthorization();
+
+builder.Services.AddCors(options =>
+{
+    options.AddPolicy(
+        "DevPortal",
+        policy =>
+        {
+            policy.WithOrigins(
+                    "http://localhost:5173",
+                    "http://127.0.0.1:5173")
+                .AllowAnyHeader()
+                .AllowAnyMethod();
+        });
+});
 
 var app = builder.Build();
 
@@ -58,6 +79,7 @@ for (var attempt = 1; attempt <= maxMigrationAttempts; attempt++)
     }
 }
 
+app.UseCors("DevPortal");
 app.UseAuthentication();
 app.UseMiddleware<TenantResolutionMiddleware>();
 app.UseAuthorization();

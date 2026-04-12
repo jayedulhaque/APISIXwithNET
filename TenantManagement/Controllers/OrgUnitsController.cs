@@ -102,7 +102,7 @@ public sealed class OrgUnitsController(
     [HttpPut("{id:guid}")]
     public async Task<IActionResult> Update(Guid id, [FromBody] UpdateOrgUnitRequest request, CancellationToken cancellationToken)
     {
-        if (tenantContext.TenantId is null)
+        if (tenantContext.TenantId is not { } tenantIdPut)
         {
             return StatusCode(StatusCodes.Status403Forbidden, new
             {
@@ -139,7 +139,7 @@ public sealed class OrgUnitsController(
     [HttpDelete("{id:guid}")]
     public async Task<IActionResult> Delete(Guid id, CancellationToken cancellationToken)
     {
-        if (tenantContext.TenantId is null)
+        if (tenantContext.TenantId is not { } tenantIdDel)
         {
             return StatusCode(StatusCodes.Status403Forbidden, new
             {

@@ -26,34 +26,44 @@ public sealed class MeController(
             return Unauthorized(new { message = ex.Message });
         }
 
-        var member = await dbContext.Members
+        var row = await dbContext.Members
             .AsNoTracking()
+            .IgnoreQueryFilters()
             .Where(x => x.CasdoorUid == user.CasdoorUid)
             .Select(x => new
             {
-                member_id = x.Id,
-                tenant_id = x.TenantId,
-                email = x.Email,
-                status = x.Status
+                MemberId = x.Id,
+                TenantId = x.TenantId,
+                Email = x.Email,
+                Status = x.Status,
+                TenantName = x.Tenant.Name,
+                TenantDomain = x.Tenant.Domain
             })
             .FirstOrDefaultAsync(cancellationToken);
 
-        if (member is null)
+        if (row is null)
         {
             return Ok(new
             {
-                onboarded = false,
-                casdoor_uid = user.CasdoorUid,
-                email = user.Email
+                Onboarded = false,
+                CasdoorUid = user.CasdoorUid,
+                Email = user.Email
             });
         }
 
         return Ok(new
         {
-            onboarded = true,
-            casdoor_uid = user.CasdoorUid,
-            tenant_id = member.tenant_id,
-            member
+            Onboarded = true,
+            CasdoorUid = user.CasdoorUid,
+            TenantId = row.TenantId,
+            Tenant = new { Name = row.TenantName, Domain = row.TenantDomain },
+            Member = new
+            {
+                row.MemberId,
+                row.TenantId,
+                row.Email,
+                row.Status
+            }
         });
     }
 }

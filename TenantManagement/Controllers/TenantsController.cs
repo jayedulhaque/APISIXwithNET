@@ -13,8 +13,114 @@ namespace TenantManagement.Controllers;
 [Route("api/tenants")]
 public sealed class TenantsController(
     TenantManagementDbContext dbContext,
+    TenantContext tenantContext,
     IUserContextAccessor userContextAccessor) : ControllerBase
 {
+    private const string CrmHeadStatus = "CRM_Head";
+
+    [HttpGet("current")]
+    public async Task<IActionResult> GetCurrent(CancellationToken cancellationToken)
+    {
+        if (tenantContext.TenantId is not { } tenantId)
+        {
+            return StatusCode(StatusCodes.Status403Forbidden, new
+            {
+                code = "tenant_required",
+                message = "User is not onboarded to a tenant."
+            });
+        }
+
+        var tenant = await dbContext.Tenants
+            .AsNoTracking()
+            .IgnoreQueryFilters()
+            .FirstOrDefaultAsync(t => t.Id == tenantId, cancellationToken);
+        if (tenant is null)
+        {
+            return NotFound();
+        }
+
+        return Ok(new
+        {
+            tenantId = tenant.Id,
+            name = tenant.Name,
+            domain = tenant.Domain
+        });
+    }
+
+    [HttpPut("current")]
+    public async Task<IActionResult> UpdateCurrent([FromBody] UpdateTenantRequest request, CancellationToken cancellationToken)
+    {
+        if (tenantContext.TenantId is not { } tenantId)
+        {
+            return StatusCode(StatusCodes.Status403Forbidden, new
+            {
+                code = "tenant_required",
+                message = "User is not onboarded to a tenant."
+            });
+        }
+
+        UserContext user;
+        try
+        {
+            user = userContextAccessor.GetRequiredUser();
+        }
+        catch (InvalidOperationException ex)
+        {
+            return Unauthorized(new { message = ex.Message });
+        }
+
+        var member = await dbContext.Members
+            .IgnoreQueryFilters()
+            .AsNoTracking()
+            .FirstOrDefaultAsync(m => m.CasdoorUid == user.CasdoorUid && m.TenantId == tenantId, cancellationToken);
+        if (member is null)
+        {
+            return NotFound();
+        }
+
+        if (member.Status != CrmHeadStatus)
+        {
+            return StatusCode(StatusCodes.Status403Forbidden, new
+            {
+                code = "crm_head_required",
+                message = "Only CRM_Head can update company (tenant) information."
+            });
+        }
+
+        if (string.IsNullOrWhiteSpace(request.Name) || string.IsNullOrWhiteSpace(request.Domain))
+        {
+            return BadRequest(new { message = "Company name and domain are required." });
+        }
+
+        var newDomain = request.Domain.Trim().ToLowerInvariant();
+        var tenant = await dbContext.Tenants
+            .IgnoreQueryFilters()
+            .FirstOrDefaultAsync(t => t.Id == tenantId, cancellationToken);
+        if (tenant is null)
+        {
+            return NotFound();
+        }
+
+        var domainTaken = await dbContext.Tenants
+            .AsNoTracking()
+            .AnyAsync(t => t.Domain == newDomain && t.Id != tenantId, cancellationToken);
+        if (domainTaken)
+        {
+            return Conflict(new { message = "This domain is already in use." });
+        }
+
+        tenant.Name = request.Name.Trim();
+        tenant.Domain = newDomain;
+        await dbContext.SaveChangesAsync(cancellationToken);
+
+        return Ok(new
+        {
+            tenantId = tenant.Id,
+            name = tenant.Name,
+            domain = tenant.Domain
+        });
+    }
+
     [HttpPost]
     public async Task<IActionResult> CreateTenant([FromBody] CreateTenantRequest request, CancellationToken cancellationToken)
     {
@@ -34,6 +140,7 @@ public sealed class TenantsController(
         }
 
         var existingMember = await dbContext.Members
+            .IgnoreQueryFilters()
             .AsNoTracking()
             .AnyAsync(x => x.CasdoorUid == user.CasdoorUid, cancellationToken);
         if (existingMember)

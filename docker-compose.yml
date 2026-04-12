@@ -28,7 +28,9 @@ services:
       - "9443:9443"
       - "9092:9092"
     networks:
-      - apisix
+      apisix:
+        aliases:
+          - casdoor.localhost
 
   apisix-dashboard:
     image: apache/apisix-dashboard:3.0.1-alpine

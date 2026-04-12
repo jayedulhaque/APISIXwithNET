@@ -1,9 +1,13 @@
 using Microsoft.EntityFrameworkCore.Migrations;
+using Microsoft.EntityFrameworkCore.Infrastructure;
+using TenantManagement.Data;
 
 #nullable disable
 
 namespace TenantManagement.Migrations;
 
+[DbContext(typeof(TenantManagementDbContext))]
+[Migration("202604080001_InitialTenantManagement")]
 public partial class InitialTenantManagement : Migration
 {
     protected override void Up(MigrationBuilder migrationBuilder)

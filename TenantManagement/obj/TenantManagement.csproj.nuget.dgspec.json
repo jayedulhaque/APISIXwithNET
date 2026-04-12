@@ -1,17 +1,17 @@
 {
   "format": 1,
   "restore": {
-    "C:\\Users\\DELL\\source\\repos\\APISIXwithNET\\APISIXwithNET\\TenantManagement\\TenantManagement.csproj": {}
+    "c:\\Users\\DELL\\source\\repos\\APISIXwithNET\\APISIXwithNET\\TenantManagement\\TenantManagement.csproj": {}
   },
   "projects": {
-    "C:\\Users\\DELL\\source\\repos\\APISIXwithNET\\APISIXwithNET\\TenantManagement\\TenantManagement.csproj": {
+    "c:\\Users\\DELL\\source\\repos\\APISIXwithNET\\APISIXwithNET\\TenantManagement\\TenantManagement.csproj": {
       "version": "1.0.0",
       "restore": {
-        "projectUniqueName": "C:\\Users\\DELL\\source\\repos\\APISIXwithNET\\APISIXwithNET\\TenantManagement\\TenantManagement.csproj",
+        "projectUniqueName": "c:\\Users\\DELL\\source\\repos\\APISIXwithNET\\APISIXwithNET\\TenantManagement\\TenantManagement.csproj",
         "projectName": "TenantManagement",
-        "projectPath": "C:\\Users\\DELL\\source\\repos\\APISIXwithNET\\APISIXwithNET\\TenantManagement\\TenantManagement.csproj",
+        "projectPath": "c:\\Users\\DELL\\source\\repos\\APISIXwithNET\\APISIXwithNET\\TenantManagement\\TenantManagement.csproj",
         "packagesPath": "C:\\Users\\DELL\\.nuget\\packages\\",
-        "outputPath": "C:\\Users\\DELL\\source\\repos\\APISIXwithNET\\APISIXwithNET\\TenantManagement\\obj\\",
+        "outputPath": "c:\\Users\\DELL\\source\\repos\\APISIXwithNET\\APISIXwithNET\\TenantManagement\\obj\\",
         "projectStyle": "PackageReference",
         "fallbackFolders": [
           "C:\\Program Files (x86)\\Microsoft Visual Studio\\Shared\\NuGetPackages"

@@ -124,6 +124,22 @@ partial class TenantManagementDbContextModelSnapshot : ModelSnapshot
             b.ToTable("tenants");
         });
 
+        modelBuilder.Entity("TenantManagement.Models.MemberInvitation", b =>
+        {
+            b.Property<Guid>("Id").HasColumnType("uuid").HasColumnName("id");
+            b.Property<DateTimeOffset>("CreatedAt").HasColumnType("timestamp with time zone").HasColumnName("created_at");
+            b.Property<Guid>("CreatedByMemberId").HasColumnType("uuid").HasColumnName("created_by_member_id");
+            b.Property<string>("Email").IsRequired().HasMaxLength(320).HasColumnType("character varying(320)").HasColumnName("email");
+            b.Property<DateTimeOffset>("ExpiresAt").HasColumnType("timestamp with time zone").HasColumnName("expires_at");
+            b.Property<string>("Status").IsRequired().HasMaxLength(50).HasColumnType("character varying(50)").HasColumnName("status");
+            b.Property<Guid>("TenantId").HasColumnType("uuid").HasColumnName("tenant_id");
+            b.Property<string>("Token").IsRequired().HasMaxLength(64).HasColumnType("character varying(64)").HasColumnName("token");
+            b.HasKey("Id");
+            b.HasIndex("TenantId");
+            b.HasIndex("Token").IsUnique();
+            b.ToTable("member_invitations");
+        });
+
         modelBuilder.Entity("TenantManagement.Models.Member", b =>
         {
             b.HasOne("TenantManagement.Models.Tenant", "Tenant")
@@ -197,6 +213,21 @@ partial class TenantManagementDbContextModelSnapshot : ModelSnapshot
 
             b.HasOne("TenantManagement.Models.Tenant", "Tenant")
                 .WithMany("ServiceNodes")
+                .HasForeignKey("TenantId")
+                .OnDelete(DeleteBehavior.Cascade)
+                .IsRequired();
+        });
+
+        modelBuilder.Entity("TenantManagement.Models.MemberInvitation", b =>
+        {
+            b.HasOne("TenantManagement.Models.Member", "CreatedByMember")
+                .WithMany()
+                .HasForeignKey("CreatedByMemberId")
+                .OnDelete(DeleteBehavior.Restrict)
+                .IsRequired();
+
+            b.HasOne("TenantManagement.Models.Tenant", "Tenant")
+                .WithMany()
                 .HasForeignKey("TenantId")
                 .OnDelete(DeleteBehavior.Cascade)
                 .IsRequired();

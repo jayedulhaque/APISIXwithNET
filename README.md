@@ -666,6 +666,161 @@ curl -s "http://localhost:9080/tenant/api/org-units/tree" \
 
 **Note:** `GET /tenant/api/me` does not require a resolved tenant; org-unit routes do. The membership lookup in middleware uses `IgnoreQueryFilters()` on `members` so `tenant_id` can be resolved before filters apply.
 
+### Phase 3: React tenant portal (`tenant-portal/`)
+
+The Vite + React + TypeScript SPA implements Casdoor login (OIDC authorization code with PKCE via `oidc-client-ts`), landing on **`GET /api/me`**, **Setup company** when not onboarded, **Dashboard** with CRM_Head invitations, and **Organization setup** (React Flow + unassigned members polling, drag-drop assignments, org-unit context menu, member meta and service-config inspector).
+
+#### Run the SPA locally
+
+```bash
+cd tenant-portal
+cp .env.example .env
+npm install
+npm run dev
+```
+
+Configure `.env` (or shell env) so `VITE_OIDC_CLIENT_ID` matches a **Casdoor Application** that allows **public** / PKCE clients (no secret in the browser):
+
+| Setting | Example |
+|--------|--------|
+| `VITE_API_BASE` | `http://localhost:9080/tenant` (via APISIX) or `http://localhost:5290` if proxying directly to TenantManagement |
+| `VITE_OIDC_AUTHORITY` | `http://casdoor.localhost:9080` |
+| `VITE_OIDC_REDIRECT_URI` | `http://localhost:5173/callback` |
+
+In Casdoor, add **Redirect URI** `http://localhost:5173/callback`, enable **Authorization Code**, and scopes including **openid** and **email**. Enable signup for invitees if they must register before accepting.
+
+**CORS (browser → APISIX → API):** The SPA calls `http://localhost:9080/tenant/...` from `http://localhost:5173`, so the browser sends an **`OPTIONS` preflight** before `GET /tenant/api/me`. If the `/tenant/*` route has no **`cors`** plugin, APISIX may forward `OPTIONS` to ASP.NET, which often responds **`405 Method Not Allowed`** for routes that only define `GET`. The example route [`apisix_conf/route-tenantmanagement-example.json`](apisix_conf/route-tenantmanagement-example.json) includes the **`cors`** plugin so preflight is answered at the gateway. **Re-apply the route** after pulling changes:
+
+```bash
+curl -s -X PUT "http://127.0.0.1:9180/apisix/admin/routes/tenant-management" \
+  -H "X-API-KEY: edd1c9f034335f136f87ad84b625c8f1" \
+  -H "Content-Type: application/json" \
+  -d @apisix_conf/route-tenantmanagement-example.json
+```
+
+If you call TenantManagement **directly** (e.g. `VITE_API_BASE=http://localhost:5290`), `UseCors` in [`TenantManagement/Program.cs`](TenantManagement/Program.cs) handles preflight without APISIX.
+
+#### Phase 3 API examples (through APISIX)
+
+Replace `TOKEN` and IDs as needed.
+
+```bash
+# Unassigned members (no org assignment)
+curl -s "http://localhost:9080/tenant/api/members/unassigned" -H "Authorization: Bearer $TOKEN"
+
+# Create assignment (drag-drop equivalent)
+curl -s -X POST "http://localhost:9080/tenant/api/assignments" \
+  -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" \
+  -d "{\"memberId\":\"MEMBER_GUID\",\"orgUnitId\":\"ORG_UNIT_GUID\"}"
+
+# Member meta (replace keys/values)
+curl -s -X PUT "http://localhost:9080/tenant/api/members/MEMBER_GUID/meta" \
+  -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" \
+  -d "{\"entries\":[{\"metaKey\":\"Language\",\"metaValue\":\"en\"}]}"
+
+# Service catalog tree
+curl -s "http://localhost:9080/tenant/api/service-nodes/tree" -H "Authorization: Bearer $TOKEN"
+
+# Upsert service config
+curl -s -X POST "http://localhost:9080/tenant/api/service-configs" \
+  -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" \
+  -d "{\"serviceNodeId\":\"NODE_GUID\",\"assignedOrgUnitId\":\"ORG_GUID\",\"slaHours\":24,\"priority\":1}"
+
+# Invite (CRM_Head only) — response includes acceptUrl for testing without SMTP
+curl -s -X POST "http://localhost:9080/tenant/api/invitations" \
+  -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" \
+  -d "{\"email\":\"invitee@example.com\"}"
+```
+
+### Phase 4: Service mapping, member meta, routing preview, invitations
+
+Phase 4 adds a **service catalog** (hierarchical `service_nodes`: Type → Category → SubCategory), **service configuration** (map a SubCategory to an org unit / “team”), **member meta** (key/value, e.g. `Expertise` / `Skills` for routing), a **ticket routing preview** API, and UX fixes for **invited users** and **empty org trees**.
+
+**Backend (TenantManagement)**
+
+| Feature | Notes |
+|--------|--------|
+| Service catalog | `POST /api/service-nodes` (body: `name`, `nodeType`: `Type` \| `Category` \| `SubCategory`, `parentId` optional). Roots must be `Type`; children follow Type → Category → SubCategory. `PUT /api/service-nodes/{id}` renames; `DELETE` fails if the node has children or `service_configs` rows. |
+| Service mappings list | `GET /api/service-configs` returns `items` with service and org unit names, SLA, priority. |
+| Upsert mapping | `POST /api/service-configs` — **`serviceNodeId` must be a SubCategory** (validated server-side). |
+| Routing preview | `GET /api/routing/preview?serviceNodeId={guid}` — uses the **highest `priority`** `service_config` for that node, resolves the assigned **team** (`org_units`), lists **agents** (members with assignments to that unit), and sets **`qualified: true`** when `member_meta` has **`Expertise`** or **`Skills`** with a value that **case-insensitively matches** the SubCategory **name**. |
+
+**Frontend (`tenant-portal`)**
+
+- **Invitee home redirect:** If the user is not onboarded but an invitation token is in the URL or `sessionStorage` (`pending_invite_token`), **Home** redirects to **Organization setup** so they do not see **Setup company**.
+- **Organization setup:** **Create root department** (header + empty-state overlay), **Service catalog** sidebar to create nodes, **SubCategory-only** service mapping, list of **configured mappings**, **Ticket routing preview** (SubCategory + Run preview), **designation** prompt when assigning a member to a unit (drag-and-drop), helper text for meta keys used in preview.
+
+#### Phase 4 manual test flow (recommended order)
+
+Use an onboarded **CRM_Head** token (`$TOKEN`) and gateway base `http://localhost:9080/tenant` as in the [Phase 3 API examples](#phase-3-api-examples-through-apisix).
+
+1. **Service tree (API)** — create Type → Category → SubCategory (replace GUIDs from responses):
+
+   ```bash
+   # Root Type
+   curl -s -X POST "http://localhost:9080/tenant/api/service-nodes" \
+     -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" \
+     -d "{\"name\":\"IT Services\",\"nodeType\":\"Type\",\"parentId\":null}"
+
+   # Category (parentId = Type id)
+   curl -s -X POST "http://localhost:9080/tenant/api/service-nodes" \
+     -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" \
+     -d "{\"name\":\"Hardware\",\"nodeType\":\"Category\",\"parentId\":\"TYPE_GUID\"}"
+
+   # SubCategory (parentId = Category id)
+   curl -s -X POST "http://localhost:9080/tenant/api/service-nodes" \
+     -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" \
+     -d "{\"name\":\"Laptop Repair\",\"nodeType\":\"SubCategory\",\"parentId\":\"CATEGORY_GUID\"}"
+   ```
+
+2. **Org tree** — ensure at least one **Department** and a **Team** (or use **Organization setup** in the SPA: **Create root department**, context menu **Add Team**).
+
+3. **Map SubCategory → team** — `assignedOrgUnitId` must be a team (or any org unit you treat as the routed team):
+
+   ```bash
+   curl -s -X POST "http://localhost:9080/tenant/api/service-configs" \
+     -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" \
+     -d "{\"serviceNodeId\":\"SUBCATEGORY_GUID\",\"assignedOrgUnitId\":\"ORG_UNIT_GUID\",\"slaHours\":24,\"priority\":1}"
+   ```
+
+4. **List mappings**
+
+   ```bash
+   curl -s "http://localhost:9080/tenant/api/service-configs" -H "Authorization: Bearer $TOKEN"
+   ```
+
+5. **Assign an agent** to that org unit (list unassigned members with `GET .../api/members/unassigned` from Phase 3), then **meta** matching the SubCategory **name**:
+
+   ```bash
+   curl -s -X POST "http://localhost:9080/tenant/api/assignments" \
+     -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" \
+     -d "{\"memberId\":\"MEMBER_GUID\",\"orgUnitId\":\"ORG_UNIT_GUID\",\"designation\":\"Agent\"}"
+
+   curl -s -X PUT "http://localhost:9080/tenant/api/members/MEMBER_GUID/meta" \
+     -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" \
+     -d "{\"entries\":[{\"metaKey\":\"Expertise\",\"metaValue\":\"Laptop Repair\"}]}"
+   ```
+
+6. **Routing preview**
+
+   ```bash
+   curl -s "http://localhost:9080/tenant/api/routing/preview?serviceNodeId=SUBCATEGORY_GUID" \
+     -H "Authorization: Bearer $TOKEN"
+   ```
+
+   Expect JSON with `team`, `agents`, and `qualified: true` for members whose Expertise/Skills value matches the SubCategory name. If nobody on the team has `Expertise` / `Skills` meta, agents are listed with `qualified: false` and an explanatory `note` on rows when applicable.
+
+7. **Invite flow (SPA)** — CRM_Head creates an invite from the Dashboard; open the returned **accept URL** (or `http://localhost:5173/organization-setup?inviteToken=...`). Sign in as the **invited email**; after OIDC callback, if the user opens **Home** while still not onboarded, they should be **redirected to Organization setup**, not **Setup company**. Accept the invitation; the new member appears under **Unassigned members** until assigned.
+
+#### Phase 4 UI smoke test (no curl)
+
+1. `cd tenant-portal && npm run dev` — log in as CRM_Head, open **Organization setup**.
+2. If the org graph is empty, use **Create root department**, then add a **Team** from the context menu.
+3. Under **Service catalog**, add a **Type**, then **Category**, then **SubCategory** using the parent dropdown.
+4. Select a **team** node; under **Service mapping**, choose a **SubCategory**, set SLA/priority, **Save mapping**; confirm it appears under **Configured mappings**.
+5. Select an **unassigned member**, add **Expertise** = exact SubCategory name, **Save meta**; drag the member onto a unit and enter a **designation** when prompted.
+6. Under **Ticket routing preview**, select the same SubCategory and **Run preview** — confirm team and qualified / not qualified agents.
+
 ## Local development (without APISIX)
 
 ```bash
@@ -685,7 +840,8 @@ Then call `http://localhost:5280/api/tasks`, `http://localhost:5280/sse`, or `ws
 - [`apisix_conf/route-tenantmanagement-example.json`](apisix_conf/route-tenantmanagement-example.json) — example **route** for TenantManagement (`/tenant/*` with rewrite)
 - [`dashboard_conf/conf.yaml`](dashboard_conf/conf.yaml) — Dashboard listen address and etcd endpoints
 - [`casdoor_conf/app.conf`](casdoor_conf/app.conf) — Casdoor server config (SQLite, origin for public URL)
-- [`TenantManagement/`](TenantManagement/) — .NET 9 Tenant onboarding API with Casdoor JWT auth, Postgres EF Core schema, tenant-scoped query filters, and org-unit tree API (recursive CTE)
+- [`TenantManagement/`](TenantManagement/) — .NET 9 Tenant onboarding API with Casdoor JWT auth, Postgres EF Core schema, tenant-scoped query filters, org-unit tree API (recursive CTE), members/assignments/invitations/service nodes and configs, routing preview, and dev CORS for the SPA
+- [`tenant-portal/`](tenant-portal/) — Vite + React + TypeScript portal (OIDC PKCE, org setup with React Flow, Phase 4 service catalog and routing preview)
 
 ## License
 

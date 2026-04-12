@@ -13,7 +13,7 @@ using System.Reflection;
 [assembly: System.Reflection.AssemblyCompanyAttribute("TenantManagement")]
 [assembly: System.Reflection.AssemblyConfigurationAttribute("Debug")]
 [assembly: System.Reflection.AssemblyFileVersionAttribute("1.0.0.0")]
-[assembly: System.Reflection.AssemblyInformationalVersionAttribute("1.0.0+e817e1d9b2f5ae6e1f0397cb6e1cfe055c2001b1")]
+[assembly: System.Reflection.AssemblyInformationalVersionAttribute("1.0.0+03663f58743497f0eaa724daff02ee9ebe75cf40")]
 [assembly: System.Reflection.AssemblyProductAttribute("TenantManagement")]
 [assembly: System.Reflection.AssemblyTitleAttribute("TenantManagement")]
 [assembly: System.Reflection.AssemblyVersionAttribute("1.0.0.0")]
